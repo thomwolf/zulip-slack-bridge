@@ -1,6 +1,6 @@
 # Hugging Face Spaces deployment
 
-The deployment target is a private Docker Space in `science`. The current Docker entrypoint is **setup-only**: it runs an offline engine check and serves a status page. It does not read Slack/Zulip secrets or start forwarding. `/healthz` reports container liveness; `/readyz` returns 503 because live forwarding is not ready. Do not treat a Space marked RUNNING as a successful bridge migration.
+The deployment target is the private Docker Space [science/zulipbridge](https://huggingface.co/spaces/science/zulipbridge). The current Docker entrypoint is **setup-only**: it runs an offline engine check and serves a status page. It checks credential presence and performs a read-only Turso connection check; it does not contact Slack/Zulip or start forwarding. `/healthz` reports container liveness; `/readyz` returns 503 because live forwarding is not ready. Do not treat a Space marked RUNNING as a successful bridge migration.
 
 ## Findings (September 2026)
 

@@ -12,7 +12,7 @@ suggested_hardware: cpu-upgrade
 
 Deployment preparation for the experimental [Slack–Zulip bridge](https://github.com/thomwolf/zulip-slack-bridge).
 
-**Forwarding is not enabled in this Space.** The existing bridge continues to run locally. This container checks the bridge's offline demo and serves a setup-status page, without connecting to Slack or Zulip.
+**Forwarding is not enabled in this Space.** The existing bridge continues to run locally. This container checks the bridge's offline demo and serves a setup-status page, without connecting to Slack or Zulip. It also checks Space secret presence and runs a read-only Turso connectivity query; no secret values are displayed.
 
 Before live cutover, we need a publicly reachable Zulip server, durable transactional database storage, and a tested migration of message mappings. Standard Spaces disk is ephemeral; HF bucket mounts are not suitable for the existing SQLite WAL database. A container reporting `RUNNING` does not mean the bridge is forwarding.
 
