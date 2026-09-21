@@ -17,6 +17,7 @@ class Config:
     zulip_channel: int
     database: Path = Path("bridge.sqlite")
     feed: str = "Slack feed"
+    storage_backend: str = "sqlite"
 
     @classmethod
     def load(cls, path: Path) -> "Config":
@@ -28,8 +29,11 @@ class Config:
             zulip_site=data["zulip"]["site"].rstrip("/"),
             zulip_channel=int(data["zulip"]["channel_id"]),
             database=path.parent / data.get("database", "bridge.sqlite"),
+            storage_backend=data.get("storage_backend", "sqlite"),
             feed=data.get("feed_topic", "Slack feed"),
         )
+        if cfg.storage_backend not in {"sqlite", "turso"}:
+            raise ValueError("storage_backend must be sqlite or turso")
         if urlparse(cfg.zulip_site).scheme != "https":
             raise ValueError(
                 "Zulip site must use HTTPS, including a trusted local test certificate"

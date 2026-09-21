@@ -1,3 +1,4 @@
+storage_backend = "sqlite"  # Or "turso"; see docs/turso-setup.md before changing.
 database = "bridge.sqlite"
 # Zulip topic for standalone messages; choose a name before first run (1–60 characters).
 feed_topic = "Slack feed"  # For example: "Community lounge" or "From #general".

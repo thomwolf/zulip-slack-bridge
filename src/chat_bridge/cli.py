@@ -1,14 +1,14 @@
-"""Small operator CLI; status and the offline demo require no credentials."""
+"""Operator CLI; remote status requires database credentials, never chat credentials."""
 
 import argparse
-import fcntl
 import json
 import os
 from pathlib import Path
 
-from .config import Config
+from .config import Config, secret
 from .model import DeliveryError
 from .store import Store
+from .turso import TursoConnection
 
 
 def main() -> None:
@@ -30,6 +30,9 @@ def main() -> None:
     outcome.add_argument("--delivered", action="store_true")
     outcome.add_argument("--not-delivered", action="store_true")
     resolve.add_argument("--message-id", help="Destination message ID for a confirmed send")
+    release = commands.add_parser("release-owner", help="Release an abandoned Turso worker claim")
+    release.add_argument("owner")
+    release.add_argument("--confirm-worker-stopped", action="store_true", required=True)
     demo = commands.add_parser("demo", help="Exercise the engine locally with fake platforms")
     demo.add_argument("--database", type=Path, default=None)
     args = parser.parse_args()
@@ -41,20 +44,25 @@ def main() -> None:
             print(json.dumps(run_demo(args.database), indent=2))
             return
         cfg = Config.load(args.config)
-        store = Store(cfg.database)
+        connection = (
+            TursoConnection.connect(secret("TURSO_DATABASE_URL"), secret("TURSO_AUTH_TOKEN"))
+            if cfg.storage_backend == "turso"
+            else None
+        )
+        store = Store(cfg.database, connection)
+        if args.command == "release-owner":
+            if connection is None:
+                raise ValueError("release-owner is only for Turso")
+            connection.release_abandoned(args.owner)
+            connection.close()
+            print("Abandoned owner released. Inspect status before restarting.")
+            return
         if args.command == "status":
             output = store.status()
             output["issues"] = store.get("state", {}).get("issues", [])
             print(json.dumps(output, indent=2))
             return
-        # flock prevents two workers, including an operator retry during a running service.
-        with cfg.database.with_suffix(".lockfile").open("a") as lock:
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                raise ValueError(
-                    "Another bridge process holds this database; stop it first"
-                ) from None
+        with store.exclusive():
             if args.command == "retry":
                 store.retry(args.event_key)
                 print("Event queued; uncertain writes are never retried automatically.")

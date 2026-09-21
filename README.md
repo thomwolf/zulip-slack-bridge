@@ -6,7 +6,7 @@ A first experimental Python implementation for one Slack channel and one Zulip c
 
 Start with the [simple install guide](INSTALL.md). The [local server guide](local/README.md) covers the isolated Zulip fixture.
 
-For hosting on Hugging Face, see [Spaces deployment findings](docs/huggingface-spaces.md). The prepared container currently serves setup status only; durable database support and an online Zulip server are still required for live forwarding.
+For hosting on Hugging Face, see [Spaces deployment findings](docs/huggingface-spaces.md). The prepared container currently serves setup status only; hosted [Turso validation and migration](docs/turso-setup.md) and an online Zulip server are still required for live forwarding.
 
 ## Try the offline example
 

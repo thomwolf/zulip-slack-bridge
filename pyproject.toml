@@ -3,7 +3,13 @@ name = "zulip-slack-bridge"
 version = "0.1.0"
 description = "An experimental, bot-only bridge for one Slack and Zulip channel pair"
 requires-python = ">=3.12"
-dependencies = ["slack-sdk>=3.33,<4", "zulip>=0.9,<1", "requests>=2.32,<3", "markdown-it-py>=3,<5"]
+dependencies = [
+    "slack-sdk>=3.33,<4",
+    "zulip>=0.9,<1",
+    "requests>=2.32,<3",
+    "markdown-it-py>=3,<5",
+    "libsql>=0.1,<0.2",
+]
 
 [project.scripts]
 chat-bridge = "chat_bridge.cli:main"

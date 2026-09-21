@@ -1,28 +1,39 @@
 """Durable input and operation journals with short SQLite transactions."""
 
+import fcntl
 import hashlib
 import json
 import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from .model import DeliveryError, Event, Platform, Transport
+from .turso import TursoConnection
 
 
 class Store:
     """Persist inputs before acknowledgement; commit routing state after delivery."""
 
-    def __init__(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, path: Path, connection: TursoConnection | None = None) -> None:
+        self.path = path
         self.lock = threading.RLock()
-        self.db = sqlite3.connect(path, check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("PRAGMA synchronous=FULL")
+        self.wakeup = threading.Event()
+        self.db: Any = connection
+        if connection is None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.db = sqlite3.connect(path, check_same_thread=False)
+            self.db.row_factory = sqlite3.Row
+            self.db.execute("PRAGMA journal_mode=WAL")
+            self.db.execute("PRAGMA synchronous=FULL")
         self.db.executescript("""
+            CREATE TABLE IF NOT EXISTS bridge_worker (
+                id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS inbox (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL,
@@ -40,11 +51,35 @@ class Store:
                 key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, status TEXT NOT NULL,
                 result TEXT, error TEXT, category TEXT
             );
+            CREATE INDEX IF NOT EXISTS inbox_unfinished ON inbox(seq) WHERE status != 'done';
         """)
+
+    @contextmanager
+    def exclusive(self) -> Iterator[None]:
+        """Serialize workers locally or across hosts, depending on storage backend."""
+        if isinstance(self.db, TursoConnection):
+            claim = self.db.ownership()
+            with self.lock:
+                claim.__enter__()
+            try:
+                yield
+            finally:
+                with self.lock:
+                    claim.__exit__(None, None, None)
+            return
+        with self.path.with_suffix(".lockfile").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise ValueError(
+                    "Another bridge process holds this database; stop it first"
+                ) from None
+            yield
 
     def close(self) -> None:
         """Close the database after receiver threads have stopped."""
-        self.db.close()
+        with self.lock:
+            self.db.close()
 
     def get(self, key: str, default: Any = None) -> Any:
         """Read one metadata value."""
@@ -99,6 +134,8 @@ class Store:
                     "INSERT OR REPLACE INTO meta VALUES ('zulip_seen',?)",
                     (json.dumps(known_ids),),
                 )
+
+        self.wakeup.set()
 
     def reconcile_receipts(self) -> None:
         """Release uncertain sends only after positive, durably recorded evidence."""
@@ -171,6 +208,13 @@ class Store:
                 ),
             )
 
+    def idle_wait(self, stop: threading.Event) -> None:
+        """Wake on ingestion or a bounded timer for retries and reconciliation."""
+        deadline = time.monotonic() + 5
+        while not stop.is_set() and time.monotonic() < deadline:
+            if self.wakeup.wait(0.2):
+                return
+
     def status(self) -> dict[str, Any]:
         """Return counts and sanitized error identifiers, never payloads or secrets."""
         with self.lock:
@@ -189,7 +233,16 @@ class Store:
                     "WHERE status IN ('uncertain','running')"
                 )
             ]
+            worker_owner = (
+                dict(
+                    self.db.execute("SELECT id,owner FROM bridge_worker WHERE id=1").fetchone()
+                    or {}
+                )
+                if isinstance(self.db, TursoConnection)
+                else None
+            )
         return {
+            "worker_owner": worker_owner,
             "events": counts,
             "pending": held,
             "uncertain_operations": ops,

@@ -176,8 +176,9 @@ class Runtime:
                 if time.monotonic() - last_reconcile >= 30:
                     self.transport.reconcile_sends(self.store)
                     last_reconcile = time.monotonic()
+                self.store.wakeup.clear()
                 if not self.engine.step():
-                    self.stop.wait(0.2)
+                    self.store.idle_wait(self.stop)
             raise DeliveryError("receiver_stopped_check_status")
         finally:
             self.stop.set()

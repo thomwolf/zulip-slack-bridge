@@ -105,3 +105,7 @@ This does not import missed history. If status reports a held or uncertain write
 In **OAuth & Permissions → Bot Token Scopes**, add **files:read** and **files:write**, then **Reinstall to Workspace**. Keep the bot token in the bridge environment current; the app-level Socket Mode token does not change.
 
 Test a small PNG/JPEG/GIF upload in each test channel, first without a caption and then with one. The image should appear with the mirrored message. Edit the caption, remove the attachment, and reply in a Slack thread to verify that promotion retains the image. This first version supports up to five images per message and 10 MiB per image. Other files keep an “open original” notice.
+
+## Optional remote database
+
+SQLite is the default for local hosting. For Hugging Face Spaces, the experimental [Turso setup guide](docs/turso-setup.md) describes remote libSQL storage. Validate it with a new test channel pair first; existing mappings require migration before changing a live installation.

@@ -9,10 +9,12 @@ The deployment target is a private Docker Space in `science`. The current Docker
 - [Normal container disk](https://huggingface.co/docs/hub/spaces-storage) is ephemeral. The [legacy persistent-storage setting](https://huggingface.co/docs/hub/spaces-config-reference) is no longer available.
 - HF's [bucket filesystem](https://github.com/huggingface/hf-mount#best-for--not-for) does not promise strong consistency or cross-node locking. Do not put this bridge's SQLite WAL database on it. Periodic snapshot uploads also lose acknowledged events on a crash and are not a substitute for transactional storage.
 
+See the [durable storage comparison](durable-storage-options.md) for the recommended Turso proof of concept and alternatives.
+
 ## What remains before live operation
 
 1. Supply a publicly reachable Zulip organization URL and a Generic bot subscribed to the chosen channel. Put its credentials in **Space Secrets**, never repository files or public Variables.
-2. Implement and test a durable database backend accessible over allowed ports. A managed database with an HTTPS transaction API is a candidate; provider selection and credentials are still needed. This repository currently supports local SQLite only.
+2. Configure the new [Turso libSQL backend](turso-setup.md) and run its hosted probe. The local driver and fault tests pass; real Turso validation and existing-journal migration are still required.
 3. Test failure during a write, reconnect, redeploy, and worker overlap against that backend. Preserve the journal rule: record incoming events durably before acknowledging them, and record outgoing intent before calling either chat API. Do not use blind retries for uncertain writes.
 4. Decide the restart policy. The current bridge requires explicit acknowledgement of possible offline gaps and has no automatic history backfill. Setting never-sleep does not prevent platform restarts.
 5. Run a separate test channel pair first. Verify posts, thread promotion, edits, deletions, reactions, formatting, and images, then restart and verify existing mappings still work.
