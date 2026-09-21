@@ -4,7 +4,7 @@ from typing import Any
 
 from .config import Config
 from .content import emoji_name
-from .formatting import slack_rich_to_zulip
+from .formatting import slack_mrkdwn_to_zulip, slack_rich_to_zulip
 from .media import zulip_images
 from .model import Event
 
@@ -55,9 +55,9 @@ def slack_events(
     text = msg.get("text", "")
     text_format = ""
     if not msg.get("bot_id") and not profile.get("is_bot"):
-        formatted = slack_rich_to_zulip(msg.get("blocks", []))
-        if formatted is not None:
-            text, text_format = formatted, "zulip"
+        formatted = slack_rich_to_zulip(msg.get("blocks", []), users)
+        text = formatted if formatted is not None else slack_mrkdwn_to_zulip(text, users)
+        text_format = "zulip"
     if msg.get("attachments"):
         text += "\n[Attachment on Slack — see original]"
     if not text and msg.get("blocks"):

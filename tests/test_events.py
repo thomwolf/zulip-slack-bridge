@@ -1,3 +1,5 @@
+import pytest
+
 from chat_bridge.content import emoji_name, neutral, render
 from chat_bridge.events import slack_events, zulip_events
 
@@ -181,3 +183,59 @@ def test_system_bots_from_registration_snapshot_never_mirror_notifications(bridg
     }
     assert ids == {"99", "42"}
     assert not zulip_events(raw, "q", bridge.config, ids, set())
+
+
+@pytest.mark.parametrize("rich", [False, True])
+def test_slack_mentions_use_literal_display_names(rich):
+    from chat_bridge.config import Config
+    from chat_bridge.events import slack_events
+
+    users = {
+        "U1": {"profile": {"display_name": "Jasper Dekoninck"}},
+        "U2": {"real_name": "Tim Gehrunger"},
+    }
+    msg = {
+        "type": "message",
+        "channel": "C1",
+        "user": "UA",
+        "ts": "1",
+        "text": "Inviting <@U1> and <@U2>",
+    }
+    if rich:
+        msg["blocks"] = [
+            {
+                "type": "rich_text",
+                "elements": [
+                    {
+                        "type": "rich_text_section",
+                        "elements": [
+                            {"type": "text", "text": "Inviting "},
+                            {"type": "user", "user_id": "U1"},
+                            {"type": "text", "text": " and "},
+                            {"type": "user", "user_id": "U2"},
+                        ],
+                    }
+                ],
+            }
+        ]
+    event = slack_events(
+        {"team_id": "T1", "event_id": "E1", "event": msg},
+        Config("T1", "C1", "https://zulip.test", 1),
+        users,
+    )[0]
+    assert event.text == "Inviting @Jasper Dekoninck and @Tim Gehrunger"
+    output = render(
+        "Author", "slack", event.text, "https://example.com", text_format=event.text_format
+    )
+    assert "@\u200bJasper Dekoninck" in output and "@\u200bTim Gehrunger" in output
+
+
+def test_mention_names_cannot_inject_markdown_and_code_stays_literal():
+    from chat_bridge.formatting import slack_mrkdwn_to_zulip
+
+    users = {"U1": {"profile": {"display_name": "**everyone**\n[click](https://evil.test)"}}}
+    result = slack_mrkdwn_to_zulip("<@U1> `<@U1>` <@UUNKNOWN|Known name>", users)
+    assert r"\*\*everyone\*\*" in result
+    assert "`<@U1>`" in result
+    assert "@Known name" in result
+    assert "\n" not in result

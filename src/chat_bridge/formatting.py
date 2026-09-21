@@ -47,7 +47,27 @@ def styled(text: str, style: dict[str, Any]) -> str:
     return left + body + right
 
 
-def slack_rich_to_zulip(blocks: list[dict[str, Any]]) -> str | None:
+def slack_user_name(
+    user_id: str, users: dict[str, dict[str, Any]] | None = None, fallback: str = ""
+) -> str:
+    """Use Slack display names as literal text without mapping destination accounts."""
+    user = (users or {}).get(user_id, {})
+    profile = user.get("profile", {})
+    name = (
+        profile.get("display_name")
+        or profile.get("real_name")
+        or user.get("real_name")
+        or user.get("name")
+        or fallback
+        or user_id
+        or "Slack user"
+    )
+    return " ".join(str(name).split())
+
+
+def slack_rich_to_zulip(
+    blocks: list[dict[str, Any]], users: dict[str, dict[str, Any]] | None = None
+) -> str | None:
     """Read Slack's structured styles, retaining links, lists, quotes and code."""
     rich = [b for b in blocks if b.get("type") == "rich_text"]
     if not rich:
@@ -67,7 +87,9 @@ def slack_rich_to_zulip(blocks: list[dict[str, Any]]) -> str | None:
             elif kind == "emoji":
                 result += ":" + element.get("name", "emoji") + ":"
             elif kind == "user":
-                result += "@Slack user"
+                result += "@" + styled(
+                    slack_user_name(element.get("user_id", ""), users), element.get("style", {})
+                )
             elif kind == "channel":
                 result += "#Slack channel"
             elif kind in {"broadcast", "usergroup"}:
@@ -103,7 +125,7 @@ def slack_rich_to_zulip(blocks: list[dict[str, Any]]) -> str | None:
     return "\n\n".join(parts)
 
 
-def slack_mrkdwn_to_zulip(text: str) -> str:
+def slack_mrkdwn_to_zulip(text: str, users: dict[str, dict[str, Any]] | None = None) -> str:
     """Convert Slack fallback text while protecting code, links and literal identifiers."""
     text = text.replace("\x00", "")
     tokens: list[str] = []
@@ -120,7 +142,11 @@ def slack_mrkdwn_to_zulip(text: str) -> str:
         ),
         text,
     )
-    text = re.sub(r"<@[A-Z0-9]+>", "@Slack user", text)
+    text = re.sub(
+        r"<@([A-Z0-9]+)(?:\|([^>]+))?>",
+        lambda m: keep("@" + markdown_text(slack_user_name(m[1], users, m[2] or ""))),
+        text,
+    )
     text = re.sub(r"<![^>]+>", "@group", text)
     text = re.sub(r"<#([A-Z0-9]+)(?:\|([^>]+))?>", lambda m: "#" + (m[2] or m[1]), text)
     # Placeholders prevent one dialect's output delimiters being converted twice.
