@@ -61,3 +61,31 @@ def test_duplicate_slack_envelope_is_acknowledged_without_second_input(bridge):
     assert client.send_socket_mode_response.call_count == 2
     assert bridge.store.status()["events"] == {"pending": 1}
     assert bridge.store.db.execute("SELECT count(*) FROM envelopes").fetchone()[0] == 1
+
+
+def test_zulip_startup_poll_and_server_timeout(bridge):
+    import threading
+
+    bridge.store.set("zulip_cursor", {"queue_id": "test-queue", "last_event_id": -1})
+    bridge.store.set("queue_longpoll_timeout", 123)
+    runtime = SimpleNamespace(
+        cfg=bridge.config,
+        store=bridge.store,
+        stop=threading.Event(),
+        reader=Mock(),
+        transport=Mock(),
+        identity={"zulip_bot": "11"},
+    )
+    calls = []
+
+    def poll(endpoint, **kwargs):
+        calls.append(kwargs)
+        if len(calls) == 2:
+            runtime.stop.set()
+        return {"result": "success", "events": []}
+
+    runtime.reader.call_endpoint.side_effect = poll
+    Runtime.receive_zulip(runtime)
+    assert [c["request"]["dont_block"] for c in calls] == [True, False]
+    assert all(c["timeout"] == 123 for c in calls)
+    assert bridge.store.get("health")["zulip"] == "connected"

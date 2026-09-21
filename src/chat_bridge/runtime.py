@@ -75,6 +75,9 @@ class Runtime:
         )
         self.transport.zulip_bots.update(zulip_bot_ids(data))
         self.store.set("queue_idle_timeout_seconds", data.get("idle_queue_timeout_secs", 600))
+        self.store.set(
+            "queue_longpoll_timeout", data.get("event_queue_longpoll_timeout_seconds", 90)
+        )
         cursor = {"queue_id": data["queue_id"], "last_event_id": data["last_event_id"]}
         self.store.ingest([], cursor)
         return cursor
@@ -83,15 +86,22 @@ class Runtime:
         """Long-poll with a bounded timeout; stop visibly if replay history expires."""
         try:
             cursor = self.store.get("zulip_cursor") or self.register()
+            first_poll = True
             while not self.stop.is_set():
                 try:
                     data = self.reader.call_endpoint(
-                        "events", method="GET", request=cursor, timeout=45
+                        "events",
+                        method="GET",
+                        request={**cursor, "dont_block": first_poll},
+                        timeout=self.store.get("queue_longpoll_timeout", 90),
                     )
                 except Exception:
+                    if self.stop.is_set():
+                        return
                     self.store.set("health", {"zulip": "connection_retrying"})
                     self.stop.wait(3)
                     continue
+                first_poll = False
                 if data.get("code") == "BAD_EVENT_QUEUE_ID":
                     self.store.set(
                         "zulip_gap",
@@ -198,4 +208,4 @@ class Runtime:
             self.stop.set()
             if manage_socket:
                 self.socket.close()
-            thread.join(timeout=50)
+            thread.join(timeout=self.store.get("queue_longpoll_timeout", 90) + 5)
