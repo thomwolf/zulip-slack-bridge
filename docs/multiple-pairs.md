@@ -39,7 +39,7 @@ TURSO_RESEARCH_DATABASE_URL=libsql://your-research-database-your-org.turso.io
 TURSO_RESEARCH_AUTH_TOKEN=replace-me
 ```
 
-Override the environment-variable names with `turso_url_env` and `turso_token_env` on a pair if needed. For an existing Turso pair you can keep `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` this way. Different variable names pointing to the same Turso host are rejected at group startup. Put all database and bot credentials in Space Secrets when hosting. The deployed Space still uses its setup-only entrypoint; live hosted orchestration remains separate work.
+Override the environment-variable names with `turso_url_env` and `turso_token_env` on a pair if needed. For an existing Turso pair you can keep `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` this way. Different variable names pointing to the same Turso host are rejected at group startup. Put all database and bot credentials in Space Secrets when hosting. The Space supports live orchestration when `BRIDGE_ENABLED=1`; see `deploy/huggingface/README.md` for setup and recovery.
 
 ## Local validation
 

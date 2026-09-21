@@ -1,6 +1,7 @@
 """One Slack socket dispatches to isolated pairs sharing a bot on each platform."""
 
 import threading
+from collections.abc import Callable
 from contextlib import ExitStack
 from typing import Any
 from urllib.parse import urlparse
@@ -51,7 +52,9 @@ class MultiRuntime:
         else:
             client.send_socket_mode_response(SocketModeResponse(envelope_id=request.envelope_id))
 
-    def run(self, accept_gap: bool = False) -> None:
+    def run(
+        self, accept_gap: bool = False, observe: Callable[["MultiRuntime"], None] | None = None
+    ) -> None:
         """Prepare all queues first; a failed pair does not stop another worker."""
         threads = []
 
@@ -70,6 +73,8 @@ class MultiRuntime:
                 thread.start()
                 threads.append(thread)
             self.socket.connect()
+            if observe:
+                observe(self)
             while any(t.is_alive() for t in threads):
                 threads[0].join(timeout=0.5)
                 # The first pair can stop while another stays healthy.
@@ -85,7 +90,12 @@ class MultiRuntime:
                 thread.join()
 
 
-def run_pairs(configs: list[Config], command: str, accept_gap: bool = False) -> dict:
+def run_pairs(
+    configs: list[Config],
+    command: str,
+    accept_gap: bool = False,
+    observe: Callable[[MultiRuntime], None] | None = None,
+) -> dict:
     """Operate a group with isolated databases and one shared Slack ingress."""
     if command not in {"check", "run", "status"}:
         raise ValueError("Select --pair for retry, resolve, or release-owner")
@@ -132,5 +142,5 @@ def run_pairs(configs: list[Config], command: str, accept_gap: bool = False) -> 
             Runtime(c, s, t, i, socket=socket)
             for c, s, t, i in zip(configs, stores, transports, identities, strict=True)
         ]
-        MultiRuntime(runtimes, socket).run(accept_gap)
+        MultiRuntime(runtimes, socket).run(accept_gap, observe)
     return results

@@ -1,13 +1,40 @@
-"""Credential-free deployment check; intentionally never starts live forwarding."""
+"""Space setup and explicitly enabled live forwarding with minimal health status."""
 
 import json
 import os
+import signal
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
+from .config import load_pairs
 from .demo import run_demo
+from .multi import MultiRuntime, run_pairs
 from .turso import TursoConnection
 
 CHECKS: dict[str, bool] = {}
+LIVE: MultiRuntime | None = None
+MODE = "setup"
+
+
+def forwarding_ready() -> bool:
+    """Only report readiness after connection and while every worker is healthy."""
+    if LIVE is None or not LIVE.socket.is_connected():
+        return False
+    try:
+        return all(
+            not r.stop.is_set() and r.store.get("health", {}).get("zulip") == "connected"
+            for r in LIVE.runtimes
+        )
+    except Exception:
+        return False
+
+
+def observe_live(runtime: MultiRuntime) -> None:
+    """Publish the running coordinator for read-only health checks."""
+    global LIVE
+    LIVE = runtime
+
 
 PAGE = """<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
@@ -32,6 +59,18 @@ been moved to this Space.</p>
 
 def response(path: str) -> tuple[int, str, bytes]:
     """Separate container liveness from the unavailable forwarding readiness."""
+    ready = forwarding_ready()
+    if path == "/" and MODE != "setup":
+        state = "Connected" if ready else "Starting or needs attention"
+        return (
+            200,
+            "text/html; charset=utf-8",
+            (
+                "<!doctype html><title>Zulip–Slack bridge</title>"
+                f"<h1>Zulip–Slack bridge</h1><p>{state}</p>"
+                "<p>Live mode. No messages or credentials are shown here.</p>"
+            ).encode(),
+        )
     if path == "/":
         checks = "<br>".join(
             f"{label}: {'ready' if passed else 'not ready'}" for label, passed in CHECKS.items()
@@ -39,9 +78,9 @@ def response(path: str) -> tuple[int, str, bytes]:
         return 200, "text/html; charset=utf-8", PAGE.replace("STARTUP_CHECKS", checks).encode()
     if path in {"/healthz", "/readyz"}:
         return (
-            200 if path == "/healthz" else 503,
+            200 if path == "/healthz" or ready else 503,
             "application/json",
-            json.dumps({"container": "ok", "forwarding": False, "mode": "setup"}).encode(),
+            json.dumps({"container": "ok", "forwarding": ready, "mode": MODE}).encode(),
         )
     return 404, "text/plain", b"Not found"
 
@@ -87,12 +126,44 @@ def deployment_checks() -> dict[str, bool]:
 
 
 def main() -> None:
-    """Verify the real engine with fake transports before serving setup status."""
+    """Serve health independently while running the bridge on the main thread."""
+    global MODE, LIVE
+    os.umask(0o077)
     run_demo(None)
-    CHECKS.update(deployment_checks())
-    print(json.dumps(CHECKS))
-    print("Offline engine check passed. Setup server starting; forwarding disabled.")
-    ThreadingHTTPServer(("0.0.0.0", 7860), Handler).serve_forever()
+    server = ThreadingHTTPServer(("0.0.0.0", 7860), Handler)
+    if os.environ.get("BRIDGE_ENABLED") != "1":
+        CHECKS.update(deployment_checks())
+        server.serve_forever()
+        return
+    MODE = "live"
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    def stop(signum: int, frame: object) -> None:
+        raise KeyboardInterrupt
+
+    signal.signal(signal.SIGTERM, stop)
+    try:
+        configs = load_pairs(Path("bridge.toml"))
+        if any(c.storage_backend != "turso" for c in configs):
+            raise ValueError("Live Spaces require durable Turso storage")
+        run_pairs(
+            configs,
+            "run",
+            accept_gap=os.environ.get("BRIDGE_ACCEPT_GAP") == "1",
+            observe=observe_live,
+        )
+    except KeyboardInterrupt:
+        print("Bridge stopped; durable state retained.", flush=True)
+    except Exception:
+        MODE = "failed"
+        LIVE = None
+        print("Bridge stopped. Inspect configuration and durable state.", flush=True)
+        # Keep a non-ready status page available for operator diagnosis.
+        threading.Event().wait()
+    finally:
+        LIVE = None
+        server.shutdown()
+        server.server_close()
 
 
 if __name__ == "__main__":

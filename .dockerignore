@@ -7,3 +7,5 @@
 !src/
 !src/chat_bridge/
 !src/chat_bridge/*.py
+
+!bridge*.toml
