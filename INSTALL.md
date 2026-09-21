@@ -109,3 +109,7 @@ Test a small PNG/JPEG/GIF upload in each test channel, first without a caption a
 ## Optional remote database
 
 SQLite is the default for local hosting. For Hugging Face Spaces, the experimental [Turso setup guide](docs/turso-setup.md) describes remote libSQL storage. Validate it with a new test channel pair first; existing mappings require migration before changing a live installation.
+
+## Add more channel pairs
+
+Use the same bots and follow [multiple channel pairs](docs/multiple-pairs.md). The initial implementation supports several pairs within one Slack workspace and one Zulip organization, with a separate database per pair.

@@ -5,16 +5,17 @@ import json
 import os
 from pathlib import Path
 
-from .config import Config, secret
+from .config import load_pairs
 from .model import DeliveryError
-from .store import Store
+from .multi import open_store, run_pairs
 from .turso import TursoConnection
 
 
 def main() -> None:
     """Run preflight, the service, offline demo, or inspect local status."""
-    parser = argparse.ArgumentParser(description="Experimental single-channel Slack/Zulip bridge")
+    parser = argparse.ArgumentParser(description="Experimental Slack/Zulip channel-pair bridge")
     parser.add_argument("--config", type=Path, default=Path("bridge.toml"))
+    parser.add_argument("--pair", help="Select a pair for status or recovery; run starts all pairs")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("check", help="Read-only identity and channel membership check")
     run = commands.add_parser(
@@ -43,13 +44,23 @@ def main() -> None:
 
             print(json.dumps(run_demo(args.database), indent=2))
             return
-        cfg = Config.load(args.config)
-        connection = (
-            TursoConnection.connect(secret("TURSO_DATABASE_URL"), secret("TURSO_AUTH_TOKEN"))
-            if cfg.storage_backend == "turso"
-            else None
-        )
-        store = Store(cfg.database, connection)
+        configs = load_pairs(args.config)
+        if args.pair:
+            if args.command == "run" and len(configs) > 1:
+                raise ValueError("Run all configured pairs together to share the Slack socket")
+            configs = [c for c in configs if c.pair_id == args.pair]
+            if not configs:
+                raise ValueError("Unknown pair id")
+        if len(configs) > 1:
+            print(
+                json.dumps(
+                    run_pairs(configs, args.command, getattr(args, "accept_gap", False)), indent=2
+                )
+            )
+            return
+        cfg = configs[0]
+        store = open_store(cfg)
+        connection = store.db if isinstance(store.db, TursoConnection) else None
         if args.command == "release-owner":
             if connection is None:
                 raise ValueError("release-owner is only for Turso")

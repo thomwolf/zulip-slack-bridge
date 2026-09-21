@@ -1,0 +1,25 @@
+# One Slack workspace, one Zulip organization, shared bot credentials.
+storage_backend = "sqlite"
+
+[slack]
+team_id = "T_REPLACE_ME"
+
+[zulip]
+site = "https://your-organization.zulipchat.com"
+
+[[pairs]]
+id = "general"
+slack_channel_id = "C_GENERAL"
+zulip_channel_id = 1
+feed_topic = "Community lounge"
+database = "bridge-general.sqlite"
+
+[[pairs]]
+id = "research"
+slack_channel_id = "C_RESEARCH"
+zulip_channel_id = 2
+feed_topic = "Slack discussions"
+database = "bridge-research.sqlite"
+# For storage_backend = "turso", each pair uses its own database:
+# turso_url_env = "TURSO_RESEARCH_DATABASE_URL"
+# turso_token_env = "TURSO_RESEARCH_AUTH_TOKEN"

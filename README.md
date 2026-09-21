@@ -1,12 +1,14 @@
 # Zulip–Slack bridge
 
-A first experimental Python implementation for one Slack channel and one Zulip channel. We host the bridge; our friends on Zulip only create a normal Generic bot and add it to their channel.
+An experimental Python bridge for one or several Slack–Zulip channel pairs. We host the bridge; our friends on Zulip only create a normal Generic bot and add it to their channel.
 
 **Status: experimental pilot tested with real Slack and a local Zulip 12.2 server.** Posts, threads, edits, reactions, images, and formatting have been exercised; this is not a production-ready, lossless sync service. See [local test results](local/TEST-RESULTS.md).
 
 Start with the [simple install guide](INSTALL.md). The [local server guide](local/README.md) covers the isolated Zulip fixture.
 
 For hosting on Hugging Face, see [Spaces deployment findings](docs/huggingface-spaces.md). The prepared container currently serves setup status only; hosted [Turso validation and migration](docs/turso-setup.md) and an online Zulip server are still required for live forwarding.
+
+For several channels using the same bots, see [multiple channel pairs](docs/multiple-pairs.md).
 
 ## Try the offline example
 

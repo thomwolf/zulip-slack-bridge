@@ -22,17 +22,23 @@ class Runtime:
     """Keep ingestion separate from slow API writes; no public webhook is required."""
 
     def __init__(
-        self, cfg: Config, store: Store, transport: LiveTransport, identity: dict[str, Any]
+        self,
+        cfg: Config,
+        store: Store,
+        transport: LiveTransport,
+        identity: dict[str, Any],
+        socket: Any = None,
     ) -> None:
         self.cfg, self.store, self.transport = cfg, store, transport
         self.engine = Engine(cfg, store, transport, identity["slack_bot"], identity["zulip_bot"])
         self.identity = identity
         self.stop = threading.Event()
         self.reader = transport.new_zulip_client()
-        self.socket = SocketModeClient(
+        self.socket = socket or SocketModeClient(
             app_token=secret("SLACK_APP_TOKEN"), web_client=transport.slack, concurrency=1
         )
-        self.socket.socket_mode_request_listeners.append(self.receive_slack)
+        if socket is None:
+            self.socket.socket_mode_request_listeners.append(self.receive_slack)
 
     def receive_slack(self, client: BaseSocketModeClient, request: SocketModeRequest) -> None:
         """Acknowledge only after SQLite commits; ignore unrequested envelope types."""
@@ -145,7 +151,7 @@ class Runtime:
             self.store.set("health", {"zulip": "stopped", "error": "receiver_failed"})
             self.stop.set()
 
-    def run(self, accept_gap: bool = False) -> None:
+    def prepare(self, accept_gap: bool = False) -> None:
         """Run until interrupted. Reconnect gaps require explicit operator acknowledgement."""
         if (self.store.get("last_run") or self.store.get("zulip_gap")) and not accept_gap:
             raise ValueError(
@@ -167,10 +173,18 @@ class Runtime:
         if not self.store.get("zulip_cursor"):
             self.register()
         self.transport.queue_id = self.store.get("zulip_cursor")["queue_id"]
+
+    def run(
+        self, accept_gap: bool = False, *, prepared: bool = False, manage_socket: bool = True
+    ) -> None:
+        """Run one isolated pair, optionally using the coordinator's Slack connection."""
+        if not prepared:
+            self.prepare(accept_gap)
         thread = threading.Thread(target=self.receive_zulip, daemon=True)
         thread.start()
         try:
-            self.socket.connect()
+            if manage_socket:
+                self.socket.connect()
             last_reconcile = 0.0
             while not self.stop.is_set():
                 if time.monotonic() - last_reconcile >= 30:
@@ -182,5 +196,6 @@ class Runtime:
             raise DeliveryError("receiver_stopped_check_status")
         finally:
             self.stop.set()
-            self.socket.close()
-            thread.join(timeout=2)
+            if manage_socket:
+                self.socket.close()
+            thread.join(timeout=50)
