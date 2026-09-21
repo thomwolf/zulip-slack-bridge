@@ -1,0 +1,7 @@
+{
+  "memcached:alpine": "sha256:31462f1ea73a0a29772ae6f32be7124da9c2a9683ae24d802bfcc54041550c76",
+  "redis:alpine": "sha256:0ba1ade8d2139544540fb6aa1338bb6a95ca4e44f4ae8a49627abee1db345da7",
+  "rabbitmq:4.2": "sha256:26d972d0e8611e178a0efe31762ae6a0973b1471c7f9c8dd125d5a8700562a6d",
+  "zulip/zulip-postgresql:14": "sha256:35732bd4bd937013134c3b3e11f3fa90514056e5c6120a77dca2ab31cb4de9cb",
+  "ghcr.io/zulip/zulip-server:12.2-0": "sha256:f2e2ab8771b6e484a17f7ba024bedcaa7ad288803aad9b70be2b18f8897a843f"
+}

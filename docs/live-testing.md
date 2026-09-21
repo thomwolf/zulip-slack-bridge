@@ -1,0 +1,16 @@
+# First live rehearsal
+
+Use a disposable [Zulip Cloud demo organization](https://zulip.com/help/demo-organizations), a Generic bot, and a Slack test app/channel from the supplied manifest. Use synthetic text and two human accounts. Cloud avoids a local container installation; a pinned Docker fixture is only needed to match a particular self-hosted version.
+
+1. Follow the README and Zulip setup guide. Run `check`; record server feature level, content windows, move settings/group membership, topic policy and length limits. Confirm that no messages were posted and no community settings changed.
+2. With default policies, send fresh standalone Slack messages: they should stay together in Slack feed. Reply to one: the original is copied into a named topic before the reply, and the feed copy becomes a navigation link. Verify subsequent edits, deletes, and reactions target the topic copy. Test an old parent and a Zulip-authored parent: both should remain untouched with a separate feed link notice. Confirm bridge notices do not mirror back.
+3. Create a Zulip topic, reply from both platforms, rename, resolve and unresolve it. Confirm a single Slack thread throughout. Move one feed post into a fresh named topic and verify binding.
+4. Edit and delete bot mirrors through their human originals at 5 minutes and again with separate examples at 15 minutes. Under a 600-second limit, expect late-change notices, not successful old-copy removal. Confirm operator issues and surviving replies. Separately test Slack's edit-window setting.
+5. Move a Zulip original into a private channel inaccessible to the bot. Confirm the Slack copy is withdrawn; then test an observable move to another channel and confirm later edits are not exported.
+6. React on originals and bot copies. Two users, and one user selecting both base and toned thumbs-up, should produce one aggregate bot reaction. Removing one variant must not remove the other.
+7. Capture sanitized own-queue Zulip local_message_id echoes. Simulate a lost send response; verify recovery with the same remote ID and no duplicate. Repeat with Slack metadata, both top-level and thread replies. A missing match must remain uncertain.
+8. Withhold Slack ACK and verify redelivery/deduplication. Interrupt after database commit but before ACK, and after remote send but before local completion. Verify IDs and journal recovery.
+9. Inspect the effective Zulip queue timeout. Force expiry on a disposable short-lived queue; confirm a visible gap interval and stopped receiver, with no silent reset. Restart deliberately using --accept-gap only after inspecting the missing interval.
+10. Check Slack parent deletion and attempts to reply afterward, attachment/source-link access, edit indicators, notification behavior, and no mention pings. Do not treat simulated tests as proof of these platform behaviors.
+
+Record each result as Pass / Fail / Not run, with server version, policies, scopes and sanitized evidence. Current state: [local Zulip smoke results](../local/TEST-RESULTS.md) cover core API behavior; the complete matrix and live Slack rehearsal are not yet run. Do not publish bot credentials or original private message bodies in the report.

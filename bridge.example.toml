@@ -1,0 +1,10 @@
+database = "bridge.sqlite"
+feed_topic = "Slack feed"
+
+[slack]
+team_id = "T_REPLACE_ME"
+channel_id = "C_REPLACE_ME"
+
+[zulip]
+site = "https://your-organization.zulipchat.com"
+channel_id = 1  # Replace with the actual numeric channel ID.

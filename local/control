@@ -1,0 +1,10 @@
+#!/bin/sh
+# Always target this fixture, regardless of the user's active Docker context.
+set -eu
+fixture_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export DOCKER_CONFIG="$fixture_dir/docker-client"
+mkdir -p "$DOCKER_CONFIG"
+export DOCKER_HOST="unix://${HOME}/.colima/zulip-bridge/docker.sock"
+exec docker-compose --project-name zulip-bridge-test \
+  --file "$fixture_dir/upstream/compose.yaml" \
+  --file "$fixture_dir/compose.override.yaml" "$@"
