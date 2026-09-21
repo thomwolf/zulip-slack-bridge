@@ -47,6 +47,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS envelopes (
                 envelope_id TEXT PRIMARY KEY, event_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS write_guards (
+                key TEXT PRIMARY KEY, method TEXT NOT NULL, baseline TEXT
+            );
             CREATE TABLE IF NOT EXISTS operations (
                 key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, status TEXT NOT NULL,
                 result TEXT, error TEXT, category TEXT
@@ -175,16 +178,48 @@ class Store:
                 "UPDATE operations SET status='uncertain', error='interrupted_write',"
                 " category='uncertain' WHERE status='running'"
             )
+            rows = self.db.execute(
+                "SELECT o.key FROM operations o JOIN write_guards g ON g.key=o.key "
+                "WHERE o.status='uncertain'"
+            ).fetchall()
+            for row in rows:
+                self.db.execute(
+                    "UPDATE inbox SET status='pending',next_attempt=0 "
+                    "WHERE key=? AND status='uncertain'",
+                    (row[0].rsplit("/", 1)[0],),
+                )
 
-    def next(self) -> Event | None:
-        """Return the oldest unfinished event; blocked work stops later delivery."""
+    def next(self, feed: str = "Slack feed") -> Event | None:
+        """Preserve conversation order while allowing unrelated delivery to proceed."""
         with self.lock:
-            row = self.db.execute(
-                "SELECT * FROM inbox WHERE status != 'done' ORDER BY seq LIMIT 1"
-            ).fetchone()
-        if not row or row["status"] != "pending" or row["next_attempt"] > time.time():
-            return None
-        return Event(**json.loads(row["payload"]))
+            rows = self.db.execute(
+                "SELECT * FROM inbox WHERE status != 'done' ORDER BY seq LIMIT 1000"
+            ).fetchall()
+            state = self.get("state", {})
+        blocked: set[str] = set()
+        for row in rows:
+            event = Event(**json.loads(row["payload"]))
+            scope = {f"{event.platform}:{i}" for i in [event.message_id, *event.ids] if i}
+            if event.platform == "slack":
+                scope.add(f"slack:{event.parent or event.message_id}")
+            if event.topic and event.topic != feed:
+                scope.add(f"topic:{event.topic}")
+            for key in list(scope):
+                mapped = state.get("index", {}).get(key)
+                message = state.get("messages", {}).get(mapped, {})
+                if message.get("root"):
+                    scope.add(f"slack:{message['root']}")
+                if message.get("topic") and message["topic"] != feed:
+                    scope.add(f"topic:{message['topic']}")
+            # Moves can merge or split topics; retain a conservative ordering barrier.
+            barrier = event.kind == "move" or not scope
+            ready = row["status"] == "pending" and row["next_attempt"] <= time.time()
+            if ready and not (scope & blocked) and not (barrier and blocked):
+                return event
+            blocked.update(scope)
+            if barrier:
+                return None
+        return None
 
     def finish(self, event: Event, state: dict[str, Any]) -> None:
         """Commit the state transition and discard the processed event body together."""
@@ -304,6 +339,57 @@ class Store:
         fingerprint = hashlib.sha256(
             json.dumps([platform, method, args], sort_keys=True).encode()
         ).hexdigest()
+        recoverable = {"react", "edit", "move", "delete", "upload-image"}
+        with self.lock:
+            previous = self.db.execute(
+                "SELECT fingerprint,status FROM operations WHERE key=?", (key,)
+            ).fetchone()
+            guard = self.db.execute(
+                "SELECT baseline FROM write_guards WHERE key=?", (key,)
+            ).fetchone()
+        if previous and previous[0] != fingerprint:
+            raise DeliveryError("non_deterministic_operation")
+        if previous and previous[1] in {"uncertain", "running"} and method in recoverable:
+            outcome = "retry" if method == "react" else "unknown"
+            if method == "upload-image":
+                result = {
+                    "skipped": "upload confirmation lost",
+                    "name": args["attachment"].get("name", "file"),
+                }
+                with self.lock, self.db:
+                    self.db.execute(
+                        "UPDATE operations SET status='done',result=?,error=NULL,category=NULL "
+                        "WHERE key=?",
+                        (json.dumps(result), key),
+                    )
+                return result
+            reconcile = getattr(transport, "reconcile_write", None)
+            if method in {"edit", "move", "delete"} and callable(reconcile) and guard:
+                outcome = reconcile(platform, method, args, json.loads(guard[0]))
+            if outcome == "done":
+                with self.lock, self.db:
+                    self.db.execute(
+                        "UPDATE operations SET status='done',result='{}',error=NULL,category=NULL "
+                        "WHERE key=?",
+                        (key,),
+                    )
+                return {}
+            if outcome != "retry":
+                raise DeliveryError("write_outcome_unresolved", "uncertain")
+            with self.lock, self.db:
+                self.db.execute("UPDATE operations SET status='retry' WHERE key=?", (key,))
+        if not previous and method in recoverable:
+            snapshot = getattr(transport, "snapshot_write", None)
+            baseline = (
+                snapshot(platform, method, args)
+                if method in {"edit", "move", "delete"} and callable(snapshot)
+                else None
+            )
+            with self.lock, self.db:
+                self.db.execute(
+                    "INSERT OR REPLACE INTO write_guards VALUES (?,?,?)",
+                    (key, method, json.dumps(baseline)),
+                )
         with self.lock, self.db:
             row = self.db.execute("SELECT * FROM operations WHERE key=?", (key,)).fetchone()
             if row:
@@ -349,6 +435,8 @@ class Store:
                     "UPDATE operations SET status=?,error=?,category=? WHERE key=?",
                     (error.category, error.code, error.category, key),
                 )
+            if error.category == "uncertain" and method in recoverable:
+                raise DeliveryError(error.code, "retry", error.retry_after) from None
             raise error
         except Exception:
             with self.lock, self.db:

@@ -43,8 +43,22 @@ class Runtime:
     def receive_slack(self, client: BaseSocketModeClient, request: SocketModeRequest) -> None:
         """Acknowledge only after SQLite commits; ignore unrequested envelope types."""
         if request.type == "events_api":
+            raw = request.payload.get("event", {})
+            message = raw.get("message", raw)
+            metadata = message.get("metadata", {})
+            receipts = []
+            if (
+                raw.get("type") == "message"
+                and message.get("user") == getattr(self, "identity", {}).get("slack_bot")
+                and raw.get("channel") == self.cfg.slack_channel
+                and metadata.get("event_type") == "zulip_slack_bridge"
+                and metadata.get("event_payload", {}).get("op_key")
+                and message.get("ts")
+            ):
+                receipts.append((metadata["event_payload"]["op_key"], "slack", message["ts"]))
             self.store.ingest(
                 slack_events(request.payload, self.cfg, self.transport.users),
+                receipts=receipts,
                 envelope=(request.envelope_id, request.payload.get("event_id", "")),
             )
             self.store.set("slack_last_event", time.time())

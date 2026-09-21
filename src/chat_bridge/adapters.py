@@ -1,5 +1,7 @@
 """SDK adapters: no automatic write retries and no secrets in raised errors."""
 
+import hashlib
+import json
 import os
 import time
 from typing import Any
@@ -134,6 +136,83 @@ class LiveTransport:
                 headers = {k.lower(): v for k, v in error.response.headers.items()}
                 time.sleep(max(1, int(headers.get("retry-after", "60"))) + 1)
         raise AssertionError("Unreachable")
+
+    @staticmethod
+    def write_digest(value: Any) -> str:
+        """Persist only hashes of destination snapshots, never extra message bodies."""
+        return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+
+    def snapshot_write(self, platform: Platform, method: str, args: dict[str, Any]) -> dict:
+        """Read the exact target before mutation; read failures are safe to retry."""
+        try:
+            if platform == "slack":
+                try:
+                    data = self.slack.reactions_get(
+                        channel=self.cfg.slack_channel, timestamp=args["id"], full=True
+                    )
+                except SlackApiError as error:
+                    if error.response.get("error") == "message_not_found":
+                        return {"absent": True}
+                    raise
+                msg: dict[str, Any] = data["message"] or {}
+                blocks = [
+                    {k: v for k, v in b.items() if k != "block_id"} for b in msg.get("blocks", [])
+                ]
+                value = {"text": msg.get("text", ""), "blocks": blocks}
+                return {"digest": self.write_digest(value)}
+            data = self.zulip.call_endpoint(
+                f"messages/{args['id']}",
+                method="GET",
+                request={"apply_markdown": False},
+                timeout=20,
+            )
+            if data.get("code") == "BAD_REQUEST" and data.get("msg") == "Invalid message(s)":
+                subscriptions = self.check_zulip(
+                    self.zulip.call_endpoint("users/me/subscriptions", method="GET", timeout=20)
+                )
+                if any(
+                    c["stream_id"] == self.cfg.zulip_channel for c in subscriptions["subscriptions"]
+                ):
+                    return {"absent": True}
+            msg = self.check_zulip(data)["message"]
+            return {
+                "digest": self.write_digest(msg["content"]),
+                "topic": self.write_digest(msg["subject"]),
+                "channel": msg.get("stream_id"),
+            }
+        except DeliveryError as error:
+            if error.category == "retry":
+                raise
+            raise DeliveryError("target_read_unavailable", "retry", 30) from None
+        except Exception:
+            raise DeliveryError("target_read_unavailable", "retry", 30) from None
+
+    def reconcile_write(
+        self, platform: Platform, method: str, args: dict[str, Any], baseline: dict | None
+    ) -> str:
+        """Confirm success or unchanged pre-write state; preserve intervening edits."""
+        current = self.snapshot_write(platform, method, args)
+        if method == "delete" and current.get("absent"):
+            return "done"
+        if not current.get("absent"):
+            if method == "move" and current.get("topic") == self.write_digest(args["topic"]):
+                return "done" if current.get("channel") == self.cfg.zulip_channel else "unknown"
+            if method == "edit":
+                desired: Any = args["text"]
+                if platform == "slack":
+                    desired = slack_message(args["text"])
+                    desired = {"text": desired["text"], "blocks": desired["blocks"]}
+                    for image in args.get("images", []):
+                        desired["blocks"].append(
+                            {
+                                "type": "image",
+                                "slack_file": {"id": image["id"]},
+                                "alt_text": image["name"],
+                            }
+                        )
+                if current.get("digest") == self.write_digest(desired):
+                    return "done"
+        return "retry" if baseline is not None and current == baseline else "unknown"
 
     def execute(self, platform: Platform, method: str, args: dict[str, Any]) -> dict[str, Any]:
         """Execute one journaled mutation; an unclassified network failure is uncertain."""
@@ -286,18 +365,26 @@ class LiveTransport:
                     oldest=str(send["started"] - 60),
                     include_all_metadata=True,
                 )
-                if send["parent"]:
-                    page = self.slack.conversations_replies(ts=send["parent"], **kwargs)
-                else:
-                    page = self.slack.conversations_history(**kwargs)
-                matches = [
-                    m
-                    for m in page.get("messages", [])
-                    if m.get("user") == self.slack_bot
-                    and m.get("metadata", {}).get("event_type") == "zulip_slack_bridge"
-                    and m.get("metadata", {}).get("event_payload", {}).get("op_key")
-                    == send["token"]
-                ]
+                matches = []
+                cursor = ""
+                for _ in range(10):
+                    if cursor:
+                        kwargs["cursor"] = cursor
+                    if send["parent"]:
+                        page = self.slack.conversations_replies(ts=send["parent"], **kwargs)
+                    else:
+                        page = self.slack.conversations_history(**kwargs)
+                    matches.extend(
+                        m
+                        for m in page.get("messages", [])
+                        if m.get("user") == self.slack_bot
+                        and m.get("metadata", {}).get("event_type") == "zulip_slack_bridge"
+                        and m.get("metadata", {}).get("event_payload", {}).get("op_key")
+                        == send["token"]
+                    )
+                    cursor = page.get("response_metadata", {}).get("next_cursor", "")
+                    if not cursor:
+                        break
                 if len(matches) == 1:
                     store.ingest([], receipts=[(send["token"], "slack", str(matches[0]["ts"]))])
             except Exception:

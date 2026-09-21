@@ -38,7 +38,7 @@ class Engine:
     def step(self) -> bool:
         """Deliver the oldest ready event. Failed work holds the FIFO for operator repair."""
         self.store.reconcile_receipts()
-        event = self.store.next()
+        event = self.store.next(self.config.feed)
         if event is None:
             return False
         self.state = self.store.get("state", initial_state())

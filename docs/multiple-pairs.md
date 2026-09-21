@@ -16,7 +16,7 @@ Existing single-pair configuration still works unchanged. When converting an exi
 
 ## Isolation
 
-There is one Slack Socket Mode connection and one routed acknowledgement per envelope. Each pair has its own worker, delivery journal, routing state, and Zulip event queue. The Zulip queues share the bot identity, while filtering messages by channel and tracking edits/deletes/reactions only for that pair. A held message or stopped worker in one pair does not block the others. Shared platform rate limits and authentication outages can still affect multiple pairs.
+There is one Slack Socket Mode connection and one routed acknowledgement per envelope. Each pair has its own worker, delivery journal, routing state, and Zulip event queue. The Zulip queues share the bot identity, while filtering messages by channel and tracking edits/deletes/reactions only for that pair. A held message or stopped worker in one pair does not block the others. Within a pair, unrelated conversations can continue while dependent work waits; see [connection recovery](connection-recovery.md). Shared platform rate limits and authentication outages can still affect multiple pairs.
 
 The entire configuration must pass preflight before startup. Duplicate channel IDs, pair IDs, or databases are rejected. Moving a Zulip message out of its mapped channel retains the existing withdrawal behavior; it does not automatically import that message into another pair.
 

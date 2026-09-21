@@ -8,6 +8,7 @@ from typing import Any
 from urllib.parse import unquote, urljoin, urlsplit
 
 import requests
+from slack_sdk.errors import SlackApiError
 
 from .config import secret
 from .content import label
@@ -58,6 +59,8 @@ def read_image(url: str, *, token: str = "", ca: str | bool = True) -> bytes:
             stream=True,
             allow_redirects=False,
         ) as response:
+            if response.status_code == 429 or response.status_code >= 500:
+                raise DeliveryError("image_download_unavailable", "retry", 30)
             if response.status_code != 200:
                 raise DeliveryError("image_download_unavailable", "failed")
             if int(response.headers.get("Content-Length", "0")) > MAX_IMAGE_BYTES:
@@ -72,13 +75,33 @@ def read_image(url: str, *, token: str = "", ca: str | bool = True) -> bytes:
         raise DeliveryError("image_download_unavailable", "retry") from None
 
 
+def source_metadata(fetch: Any) -> Any:
+    """Metadata retrieval precedes all uploads and is safe to retry after disconnects."""
+    try:
+        return fetch()
+    except DeliveryError as error:
+        if error.category == "uncertain":
+            raise DeliveryError(error.code, "retry", 30) from None
+        raise
+    except SlackApiError as error:
+        if error.response.status_code == 429 or error.response.status_code >= 500:
+            raise DeliveryError(
+                "image_metadata_unavailable",
+                "retry",
+                float(error.response.headers.get("Retry-After", 30)),
+            ) from None
+        raise
+    except Exception:
+        raise DeliveryError("image_metadata_unavailable", "retry", 30) from None
+
+
 def transfer_image(transport: Any, destination: str, attachment: dict[str, Any]) -> dict[str, Any]:
     """Download from the source and upload privately to the destination."""
     name = label(attachment.get("name", "image")).replace("|", "")[:100] or "image"
     if name.rsplit(".", 1)[-1].lower() not in IMAGE_EXTENSIONS:
         return {"skipped": "unsupported format", "name": name}
     if destination == "zulip":
-        info = transport.slack.files_info(file=attachment["id"])["file"]
+        info = source_metadata(lambda: transport.slack.files_info(file=attachment["id"]))["file"]
         if info.get("size", 0) > MAX_IMAGE_BYTES:
             return {"skipped": "larger than 10 MB", "name": name}
         url = info.get("url_private_download") or info.get("url_private", "")
@@ -96,8 +119,10 @@ def transfer_image(transport: Any, destination: str, attachment: dict[str, Any])
         path = attachment["id"]
         if not path.startswith("/user_uploads/") or ".." in unquote(path).split("/"):
             return {"skipped": "unsupported upload path", "name": name}
-        response = transport.check_zulip(
-            transport.zulip.call_endpoint(path.lstrip("/"), method="GET", timeout=20)
+        response = source_metadata(
+            lambda: transport.check_zulip(
+                transport.zulip.call_endpoint(path.lstrip("/"), method="GET", timeout=20)
+            )
         )
         url = urljoin(transport.cfg.zulip_site + "/", response["url"])
         # The temporary URL is used immediately and never stored. Remote storage
