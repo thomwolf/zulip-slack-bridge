@@ -128,3 +128,38 @@ def test_permission_repair_allows_retry_of_rejected_send(bridge):
     bridge.store.retry(event.key)
     assert bridge.engine.step()
     assert bridge.store.status()["events"] == {"done": 1}
+
+
+@pytest.mark.parametrize("method,category", [("react", "retry"), ("send", "uncertain")])
+def test_lost_response_retries_only_idempotent_reactions(bridge, method, category):
+    from unittest.mock import Mock
+
+    from chat_bridge.model import DeliveryError
+
+    transport = Mock()
+    transport.execute.side_effect = DeliveryError("write_connection_lost", "uncertain")
+    args = {"id": "1", "emoji": "heart", "added": True}
+    with pytest.raises(DeliveryError) as raised:
+        bridge.store.call("test/reaction", "zulip", method, args, transport)
+    assert raised.value.category == category
+    transport.execute.side_effect = None
+    transport.execute.return_value = {}
+    if method == "react":
+        assert bridge.store.call("test/reaction", "zulip", method, args, transport) == {}
+        assert transport.execute.call_count == 2
+    else:
+        with pytest.raises(DeliveryError):
+            bridge.store.call("test/reaction", "zulip", method, args, transport)
+        assert transport.execute.call_count == 1
+
+
+def test_readiness_detects_held_delivery_and_retry(bridge):
+    from chat_bridge.model import DeliveryError, Event
+
+    e = Event("health-test", "slack", "reaction", "1")
+    bridge.store.ingest([e])
+    assert not bridge.store.delivery_blocked()
+    bridge.store.fail(e, DeliveryError("timeout", "retry"))
+    assert bridge.store.delivery_blocked()
+    bridge.store.finish(e, {})
+    assert not bridge.store.delivery_blocked()

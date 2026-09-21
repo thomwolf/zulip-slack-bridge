@@ -208,6 +208,17 @@ class Store:
                 ),
             )
 
+    def delivery_blocked(self) -> bool:
+        """Report held events or delayed retries without exposing message contents."""
+        with self.lock:
+            return (
+                self.db.execute(
+                    "SELECT 1 FROM inbox WHERE status!='done' "
+                    "AND (status!='pending' OR attempts>0) LIMIT 1"
+                ).fetchone()
+                is not None
+            )
+
     def idle_wait(self, stop: threading.Event) -> None:
         """Wake on ingestion or a bounded timer for retries and reconciliation."""
         deadline = time.monotonic() + 5
@@ -262,8 +273,7 @@ class Store:
             operations = self.db.execute("SELECT key,status FROM operations").fetchall()
             prefix = f"{key}/"
             if any(
-                r["key"].startswith(prefix) and r["status"] in {"running", "uncertain"}
-                for r in operations
+                r[0].startswith(prefix) and r[1] in {"running", "uncertain"} for r in operations
             ):
                 raise ValueError("Resolve uncertain writes against remote state before retrying")
             self.db.execute(
@@ -330,12 +340,16 @@ class Store:
         try:
             result = transport.execute(platform, method, args)
         except DeliveryError as error:
+            # Reaction writes set membership; duplicates are normalized by adapters.
+            # A lost response can be retried without duplicating a message.
+            if method == "react" and error.category == "uncertain":
+                error = DeliveryError(error.code, "retry", error.retry_after)
             with self.lock, self.db:
                 self.db.execute(
                     "UPDATE operations SET status=?,error=?,category=? WHERE key=?",
                     (error.category, error.code, error.category, key),
                 )
-            raise
+            raise error
         except Exception:
             with self.lock, self.db:
                 self.db.execute(

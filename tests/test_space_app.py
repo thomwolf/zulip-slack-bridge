@@ -47,12 +47,16 @@ def test_live_readiness_tracks_socket_and_worker(monkeypatch):
 
     runtime = Mock()
     runtime.stop.is_set.return_value = False
+    runtime.store.delivery_blocked.return_value = False
     runtime.store.get.return_value = {"zulip": "connected"}
     live = Mock(runtimes=[runtime])
     live.socket.is_connected.return_value = True
     monkeypatch.setattr(space_app, "LIVE", live)
     monkeypatch.setattr(space_app, "MODE", "live")
     assert response("/readyz")[0] == 200
+    runtime.store.delivery_blocked.return_value = True
+    assert response("/readyz")[0] == 503
+    runtime.store.delivery_blocked.return_value = False
     live.socket.is_connected.return_value = False
     assert response("/readyz")[0] == 503
     live.socket.is_connected.return_value = True

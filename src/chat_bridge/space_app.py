@@ -23,7 +23,9 @@ def forwarding_ready() -> bool:
         return False
     try:
         return all(
-            not r.stop.is_set() and r.store.get("health", {}).get("zulip") == "connected"
+            not r.stop.is_set()
+            and r.store.get("health", {}).get("zulip") == "connected"
+            and not r.store.delivery_blocked()
             for r in LIVE.runtimes
         )
     except Exception:
