@@ -48,6 +48,14 @@ site = "https://your-organization.zulipchat.com"
 channel_id = 123
 ```
 
+Choose `feed_topic` before the first run: it is the Zulip topic used for standalone messages, and **Slack feed** is only the default. For example:
+
+```toml
+feed_topic = "Community lounge"
+```
+
+Use 1–60 characters. Messages written directly in that Zulip topic also appear as standalone Slack messages; other Zulip topics become Slack threads. This setting is bound to the bridge database: changing it after the bridge has started requires a migration, which is not yet implemented. Do not delete the database to rename the feed, because that loses existing message mappings.
+
 Edit `.env` with the four credentials:
 
 ```dotenv
@@ -68,7 +76,7 @@ uv --no-config run --env-file .env chat-bridge run
 
 `check` verifies the bots, channel membership and Zulip policies without posting messages. Leave `run` open while testing; press **Ctrl-C** to stop. The Mac must stay awake and online for forwarding to work.
 
-Try a message in Slack, a thread reply, a new Zulip topic, an edit, a deletion, and a thumbs-up reaction on each side. Slack standalone messages should share **Slack feed**; a thread reply should create a named topic containing a copy of the original followed by the reply. The feed copy becomes a “Discussion continued” link, or receives a separate link notice when editing is unavailable. A new Zulip topic should create a linked title message in Slack, with the first Zulip message as its first reply. Later messages join that thread; a complete topic rename updates the title. Edits, reactions and deletions target the corresponding replies, not the title.
+Try a message in Slack, a thread reply, a new Zulip topic, an edit, a deletion, and a thumbs-up reaction on each side. Slack standalone messages should share your configured feed topic (**Slack feed** by default); a thread reply should create a named topic containing a copy of the original followed by the reply. The feed copy becomes a “Discussion continued” link, or receives a separate link notice when editing is unavailable. A new Zulip topic should create a linked title message in Slack, with the first Zulip message as its first reply. Later messages join that thread; a complete topic rename updates the title. Edits, reactions and deletions target the corresponding replies, not the title.
 
 For local delivery status:
 

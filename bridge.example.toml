@@ -1,5 +1,6 @@
 database = "bridge.sqlite"
-feed_topic = "Slack feed"
+# Zulip topic for standalone messages; choose a name before first run (1–60 characters).
+feed_topic = "Slack feed"  # For example: "Community lounge" or "From #general".
 
 [slack]
 team_id = "T_REPLACE_ME"

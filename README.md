@@ -2,9 +2,11 @@
 
 A first experimental Python implementation for one Slack channel and one Zulip channel. We host the bridge; our friends on Zulip only create a normal Generic bot and add it to their channel.
 
-**Status: tested against a local Zulip 12.2 server with simulated Slack; live Slack is not tested.** This is a foundation for a test-channel pilot, not the complete PRD or a production-ready sync service. The local server is running at https://zulip.localhost:8443. Slack app credentials are still needed for full end-to-end validation. See [local test results](local/TEST-RESULTS.md).
+**Status: experimental pilot tested with real Slack and a local Zulip 12.2 server.** Posts, threads, edits, reactions, images, and formatting have been exercised; this is not a production-ready, lossless sync service. See [local test results](local/TEST-RESULTS.md).
 
 Start with the [simple install guide](INSTALL.md). The [local server guide](local/README.md) covers the isolated Zulip fixture.
+
+For hosting on Hugging Face, see [Spaces deployment findings](docs/huggingface-spaces.md). The prepared container currently serves setup status only; durable database support and an online Zulip server are still required for live forwarding.
 
 ## Try the offline example
 

@@ -1,0 +1,9 @@
+# Allowlist: local credentials, databases, and Git history never enter build context.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!src/
+!src/chat_bridge/
+!src/chat_bridge/*.py
