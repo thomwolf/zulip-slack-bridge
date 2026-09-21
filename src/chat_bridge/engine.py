@@ -297,7 +297,15 @@ class Engine:
         self.state["messages"][key] = message
         self.state["index"][f"slack:{slack_id}"] = key
         self.state["index"][f"zulip:{zulip_id}"] = key
-        for pending in self.state["deferred"].pop(key, []):
+        aliases = {f"slack:{slack_id}", f"zulip:{zulip_id}"}
+        destination_alias = f"zulip:{zulip_id}" if e.platform == "slack" else f"slack:{slack_id}"
+        if destination_alias in self.state["tombstones"]:
+            message["suppressed"] = True
+            self.issue("destination_removed_locally", destination_alias)
+        deferred = [
+            pending for alias in aliases for pending in self.state["deferred"].pop(alias, [])
+        ]
+        for pending in self.store.order_deferred(deferred):
             self.apply(Event(**pending))
 
     def promote(self, e: Event, root: str) -> None:
@@ -480,10 +488,46 @@ class Engine:
                     self.issue("withdrawal_copy_remains_notice_posted", e.message_id)
         if m.get("topic_copy") and not m.get("topic_copy_suppressed"):
             self.update_topic_copy(e, m, "delete")
+        for copy in m.get("correction_notices", []):
+            self.withdraw_correction(e, m, copy)
         if e.platform == "zulip":
             self.issue("withdrawn_deleted_or_moved_out_of_view", e.message_id)
         m.update(deleted=True, text="", expected="", reactions={"slack": {}, "zulip": {}})
         m["echoes"] = []
+
+    def withdraw_correction(self, e: Event, m: dict[str, Any], copy: dict[str, Any]) -> None:
+        """Withdraw every full-text correction, retaining policy-denial visibility."""
+        prefix = f"correction-{copy['id']}"
+        destination = copy["platform"]
+        try:
+            self.call(e, prefix + "-delete", destination, "delete", id=copy["id"])
+            return
+        except DeliveryError as error:
+            if error.category != "denied":
+                raise
+        try:
+            self.call(
+                e,
+                prefix + "-redact",
+                destination,
+                "edit",
+                id=copy["id"],
+                text="Original message withdrawn (deleted or moved out of view).",
+            )
+        except DeliveryError as error:
+            if error.category != "denied":
+                raise
+            routing = {"topic": copy["topic"]} if destination == "zulip" else {"parent": m["root"]}
+            self.call(
+                e,
+                prefix + "-notice",
+                destination,
+                "send",
+                **routing,
+                text="The original was withdrawn; the platform refused removal of this correction: "
+                + self.link(destination, copy["id"]),
+            )
+            self.issue("correction_copy_remains_notice_posted", e.message_id)
 
     def update_topic_copy(self, e: Event, m: dict[str, Any], method: str, text: str = "") -> None:
         """Keep a copied Zulip original current without editing the human's feed message."""
@@ -545,7 +589,7 @@ class Engine:
                 )
             text += correction
         routing = {"topic": m["topic"]} if destination == "zulip" else {"parent": m["root"]}
-        self.call(
+        result = self.call(
             e,
             "notice",
             destination,
@@ -554,6 +598,10 @@ class Engine:
             **routing,
             **({"images": images or []} if destination == "slack" and correction else {}),
         )
+        if correction:
+            copy = {"id": str(result["id"]), "platform": destination, "topic": m["topic"]}
+            if copy not in m.setdefault("correction_notices", []):
+                m["correction_notices"].append(copy)
 
     def react(self, e: Event, m: dict[str, Any]) -> None:
         """Aggregate real remote reactors into one reaction owned by the destination bot."""

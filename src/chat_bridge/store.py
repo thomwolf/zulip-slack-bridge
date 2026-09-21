@@ -211,8 +211,19 @@ class Store:
                     scope.add(f"slack:{message['root']}")
                 if message.get("topic") and message["topic"] != feed:
                     scope.add(f"topic:{message['topic']}")
-            # Moves can merge or split topics; retain a conservative ordering barrier.
-            barrier = event.kind == "move" or not scope
+            # Creates can expose uncommitted topic/message mappings; serialize until bound.
+            started = False
+            if event.kind == "create":
+                prefix = event.key + "/"
+                with self.lock:
+                    started = (
+                        self.db.execute(
+                            "SELECT 1 FROM operations WHERE key>=? AND key<? LIMIT 1",
+                            (prefix, prefix + "\uffff"),
+                        ).fetchone()
+                        is not None
+                    )
+            barrier = event.kind == "move" or started or not scope
             ready = row["status"] == "pending" and row["next_attempt"] <= time.time()
             if ready and not (scope & blocked) and not (barrier and blocked):
                 return event
@@ -220,6 +231,17 @@ class Store:
             if barrier:
                 return None
         return None
+
+    def order_deferred(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Replay events from both aliases in their durable ingestion order."""
+        with self.lock:
+            ordered = []
+            for event in events:
+                row = self.db.execute(
+                    "SELECT seq FROM inbox WHERE key=?", (event["key"],)
+                ).fetchone()
+                ordered.append((row[0] if row else 0, event))
+        return [event for _, event in sorted(ordered, key=lambda item: item[0])]
 
     def finish(self, event: Event, state: dict[str, Any]) -> None:
         """Commit the state transition and discard the processed event body together."""
@@ -323,7 +345,10 @@ class Store:
             row = self.db.execute("SELECT status FROM operations WHERE key=?", (key,)).fetchone()
             if not row or row[0] != "uncertain":
                 raise ValueError("Choose an uncertain operation key from status")
-            send_step = key.rsplit("/", 1)[-1] in {"mirror", "context", "breadcrumb", "notice"}
+            send_step = (
+                self.db.execute("SELECT 1 FROM sends WHERE operation=?", (key,)).fetchone()
+                is not None
+            )
             if delivered and send_step and not message_id:
                 raise ValueError("A confirmed send requires its actual destination message ID")
             result = {"id": message_id} if message_id else {}

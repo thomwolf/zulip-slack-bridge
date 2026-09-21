@@ -4,11 +4,13 @@ import json
 import os
 import signal
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from .config import load_pairs
+from .config import Config, load_pairs
 from .demo import run_demo
+from .model import DeliveryError
 from .multi import MultiRuntime, run_pairs
 from .turso import TursoConnection
 
@@ -127,6 +129,26 @@ def deployment_checks() -> dict[str, bool]:
     return checks
 
 
+def run_live(configs: list[Config]) -> None:
+    """Retry only preflight outages after run_pairs has cleanly released ownership."""
+    delay = 5.0
+    while True:
+        try:
+            run_pairs(
+                configs,
+                "run",
+                accept_gap=os.environ.get("BRIDGE_ACCEPT_GAP") == "1",
+                observe=observe_live,
+            )
+            return
+        except DeliveryError as error:
+            if error.code != "preflight_retryable" or error.category != "retry":
+                raise
+            print("Platform preflight temporarily unavailable; retrying.", flush=True)
+            time.sleep(max(delay, error.retry_after))
+            delay = min(60, delay * 2)
+
+
 def main() -> None:
     """Serve health independently while running the bridge on the main thread."""
     global MODE, LIVE
@@ -148,12 +170,7 @@ def main() -> None:
         configs = load_pairs(Path("bridge.toml"))
         if any(c.storage_backend != "turso" for c in configs):
             raise ValueError("Live Spaces require durable Turso storage")
-        run_pairs(
-            configs,
-            "run",
-            accept_gap=os.environ.get("BRIDGE_ACCEPT_GAP") == "1",
-            observe=observe_live,
-        )
+        run_live(configs)
     except KeyboardInterrupt:
         print("Bridge stopped; durable state retained.", flush=True)
     except Exception:

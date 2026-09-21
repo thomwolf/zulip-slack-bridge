@@ -178,3 +178,12 @@ def test_slack_edit_window_rejection_selects_notice_fallback(transport):
     with pytest.raises(DeliveryError) as error:
         transport.execute("slack", "edit", {"id": "1.000001", "text": "Fix"})
     assert error.value.category == "denied"
+
+
+def test_preflight_network_outage_is_retryable(transport):
+    transport.slack.auth_test.side_effect = TimeoutError("private network details")
+    with pytest.raises(DeliveryError) as error:
+        transport.preflight()
+    assert error.value.code == "preflight_retryable"
+    assert error.value.category == "retry"
+    assert "private" not in str(error.value)

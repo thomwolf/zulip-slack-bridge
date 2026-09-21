@@ -6,6 +6,7 @@ import os
 import time
 from typing import Any
 
+import requests
 import zulip
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
@@ -111,8 +112,22 @@ class LiveTransport:
             settings = self.check_zulip(self.zulip.call_endpoint("server_settings", method="GET"))
             self.feature_level = int(settings.get("zulip_feature_level", 0))
             self.policy = self.read_policy(int(me["user_id"]))
-        except (ValueError, DeliveryError):
+        except ValueError:
             raise
+        except DeliveryError as error:
+            if error.category == "retry":
+                raise DeliveryError("preflight_retryable", "retry", error.retry_after) from None
+            raise
+        except SlackApiError as error:
+            if error.response.status_code == 429 or error.response.status_code >= 500:
+                raise DeliveryError(
+                    "preflight_retryable",
+                    "retry",
+                    float(error.response.headers.get("Retry-After", 5)),
+                ) from None
+            raise DeliveryError("preflight_connection_or_api_failure") from None
+        except (OSError, requests.RequestException):
+            raise DeliveryError("preflight_retryable", "retry") from None
         except Exception:
             raise DeliveryError("preflight_connection_or_api_failure") from None
         return {
