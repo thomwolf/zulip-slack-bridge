@@ -425,7 +425,7 @@ class Engine:
         except DeliveryError as error:
             if error.category != "denied":
                 raise
-            self.notice(e, m, destination, "edited")
+            self.notice(e, m, destination, "edited", correction=text, images=images)
             self.issue("edit_not_applied_notice_posted", e.message_id)
         if m.get("topic_copy") and not m.get("topic_copy_suppressed"):
             copy_text = render(
@@ -508,15 +508,52 @@ class Engine:
             )
             self.issue("topic_copy_change_denied", e.message_id)
 
-    def notice(self, e: Event, m: dict[str, Any], destination: Platform, action: str) -> None:
-        """Explain rejected corrections without repeating withdrawn or stale content."""
+    def notice(
+        self,
+        e: Event,
+        m: dict[str, Any],
+        destination: Platform,
+        action: str,
+        correction: str = "",
+        images: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Include the updated text for rejected edits; never repeat deleted content."""
         text = (
             f"{label(m['author'])}'s original was {action} on {e.platform.title()}: "
             f"{self.link(e.platform, e.message_id)}\n"
             "The platform rejected updating this copy; its previous content remains."
         )
+        if correction:
+            text += "\n\nUpdated message:\n"
+            limit = (
+                getattr(self.transport, "max_message_length", 9000)
+                if destination == "zulip"
+                else 9000
+            )
+            if len(text) + len(correction) > limit:
+                correction = (
+                    render(
+                        m["author"],
+                        e.platform,
+                        e.text,
+                        self.link(e.platform, e.message_id),
+                        text_format=e.text_format,
+                        destination=destination,
+                        limit=limit - len(text) - 80,
+                    )
+                    + "\n[Full message and attachments — open original]"
+                )
+            text += correction
         routing = {"topic": m["topic"]} if destination == "zulip" else {"parent": m["root"]}
-        self.call(e, "notice", destination, "send", text=text, **routing)
+        self.call(
+            e,
+            "notice",
+            destination,
+            "send",
+            text=text,
+            **routing,
+            **({"images": images or []} if destination == "slack" and correction else {}),
+        )
 
     def react(self, e: Event, m: dict[str, Any]) -> None:
         """Aggregate real remote reactors into one reaction owned by the destination bot."""

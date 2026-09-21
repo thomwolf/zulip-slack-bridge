@@ -33,7 +33,7 @@ def test_late_change_posts_notice_once_and_keeps_old_copy(bridge, kind):
         if method == "send" and "previous content remains" in a["text"]
     ]
     assert len(notices) == 1
-    assert "Correction" not in notices[0]["text"]
+    assert ("Correction" in notices[0]["text"]) == (kind == "edit")
     assert bridge.store.status()["issues"]
     assert not bridge.store.status()["pending"]
 
