@@ -49,37 +49,65 @@ max-width:680px;margin:10vh auto;padding:24px}h1{line-height:1.2}
 article{background:white;padding:32px;border-radius:16px;border:1px solid #dde3eb}
 small{color:#53657a}a{color:#1962b3}
 </style><article><small>Hugging Face Science</small><h1>Zulip–Slack bridge</h1>
-<p><strong>Deployment prepared · Forwarding not enabled</strong></p>
-<p>The bridge software passed its offline startup check. The live bridge has not
-been moved to this Space.</p>
-<p>Before connecting, we need:</p><ul>
-<li>A Zulip server reachable over public HTTPS.</li>
-<li>Verified Turso credentials in this Space.</li>
-<li>A verified handover from the current bridge.</li></ul>
-<p>STARTUP_CHECKS</p><p>No messages or credentials are shown here.</p>
-<a href="https://github.com/thomwolf/zulip-slack-bridge">Source code and setup guides</a>
+<p role="status"><strong>BRIDGE_STATUS</strong></p>
+<p>Connects paired Slack and Zulip channels using shared bots. Messages appear
+under their original author’s name, linked to the original post.</p>
+<h2>Configuration</h2>
+<p><a href="https://huggingface.co/spaces/science/zulipbridge/blob/main/bridge.toml"
+>Edit bridge.toml on Hugging Face</a> — open the file, choose Edit, then commit
+using an account with write access.</p>
+<p>Each <code>[[pairs]]</code> entry selects a Slack channel ID, a Zulip channel ID,
+and a <code>feed_topic</code> for standalone messages. Committing a change rebuilds
+and restarts the Space; configuration is read at startup.</p>
+<p><strong>Changing an existing pair needs a migration.</strong> The database is
+bound to its channels, bots and feed topic. Editing those values alone stops
+forwarding to protect existing message mappings. A new pair needs its own database.</p>
+<p>Keep tokens and API keys in
+<a href="https://huggingface.co/spaces/science/zulipbridge/settings">Space Settings → Secrets</a>,
+never in TOML. Turso stores message mappings and delivery state across restarts.</p>
+<h2>How conversations sync</h2>
+<ul><li>Standalone Slack posts go to the configured Zulip feed topic.</li>
+<li>A Slack reply starts a Zulip topic with a copy of its parent message.</li>
+<li>A Zulip topic becomes a Slack thread with its title as the heading.</li>
+<li>Edits, deletions, reactions and supported images sync through the bots,
+subject to each platform’s permissions. Messages sent during downtime are not backfilled.</li></ul>
+<h2>Setup and source</h2>
+<p>Invite the Slack bot to each paired channel and subscribe the Zulip bot to its
+channel. Set the credentials in Secrets, configure the pairs, and enable forwarding
+with <code>BRIDGE_ENABLED=1</code>. Check this page after every change:
+“Forwarding connected” confirms readiness; a Space marked RUNNING alone does not.</p>
+<p><a href="https://github.com/thomwolf/zulip-slack-bridge">GitHub repository</a> ·
+<a href="https://github.com/thomwolf/zulip-slack-bridge/blob/main/docs/zulip-setup.md"
+>Zulip setup</a> ·
+<a href="https://github.com/thomwolf/zulip-slack-bridge/blob/main/docs/live-testing.md"
+>Slack setup and testing</a> ·
+<a href="https://github.com/thomwolf/zulip-slack-bridge/blob/main/docs/huggingface-spaces.md"
+>Space setup</a></p>
+<p>STARTUP_CHECKS</p><small>No messages or credentials are shown here.</small>
 </article></html>"""
 
 
 def response(path: str) -> tuple[int, str, bytes]:
-    """Separate container liveness from the unavailable forwarding readiness."""
+    """Serve operator guidance and distinguish container liveness from forwarding readiness."""
     ready = forwarding_ready()
-    if path == "/" and MODE != "setup":
-        state = "Connected" if ready else "Starting or needs attention"
-        return (
-            200,
-            "text/html; charset=utf-8",
-            (
-                "<!doctype html><title>Zulip–Slack bridge</title>"
-                f"<h1>Zulip–Slack bridge</h1><p>{state}</p>"
-                "<p>Live mode. No messages or credentials are shown here.</p>"
-            ).encode(),
-        )
     if path == "/":
-        checks = "<br>".join(
-            f"{label}: {'ready' if passed else 'not ready'}" for label, passed in CHECKS.items()
+        state = (
+            "Forwarding connected"
+            if ready
+            else {
+                "setup": "Setup mode · Forwarding disabled",
+                "failed": "Bridge stopped · Check configuration and logs",
+            }.get(MODE, "Starting or needs attention · Forwarding not ready")
         )
-        return 200, "text/html; charset=utf-8", PAGE.replace("STARTUP_CHECKS", checks).encode()
+        checks = (
+            "<br>".join(
+                f"{label}: {'ready' if passed else 'not ready'}" for label, passed in CHECKS.items()
+            )
+            if MODE == "setup"
+            else ""
+        )
+        page = PAGE.replace("BRIDGE_STATUS", state).replace("STARTUP_CHECKS", checks)
+        return 200, "text/html; charset=utf-8", page.encode()
     if path in {"/healthz", "/readyz"}:
         return (
             200 if path == "/healthz" or ready else 503,
