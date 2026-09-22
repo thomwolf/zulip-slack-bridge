@@ -61,7 +61,11 @@ and a <code>feed_topic</code> for standalone messages. Committing a change rebui
 and restarts the Space; configuration is read at startup.</p>
 <p><strong>Changing an existing pair needs a migration.</strong> The database is
 bound to its channels, bots and feed topic. Editing those values alone stops
-forwarding to protect existing message mappings. A new pair needs its own database.</p>
+forwarding to protect existing message mappings. For a Slack-channel switch, pause
+this Space and use the <code>switch-slack-channel</code> command in the
+<a href="https://github.com/thomwolf/zulip-slack-bridge/blob/main/docs/huggingface-spaces.md"
+>operator guide</a> to preview and apply an archived fresh start.
+A separate additional pair needs its own database.</p>
 <p>Keep tokens and API keys in
 <a href="https://huggingface.co/spaces/science/zulipbridge/settings">Space Settings → Secrets</a>,
 never in TOML. Turso stores message mappings and delivery state across restarts.</p>

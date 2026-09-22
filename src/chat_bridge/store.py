@@ -34,6 +34,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS bridge_worker (
                 id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS pair_archives (
+                id TEXT PRIMARY KEY, created REAL NOT NULL, snapshot TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS inbox (
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE NOT NULL,

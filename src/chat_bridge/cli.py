@@ -34,6 +34,13 @@ def main() -> None:
     release = commands.add_parser("release-owner", help="Release an abandoned Turso worker claim")
     release.add_argument("owner")
     release.add_argument("--confirm-worker-stopped", action="store_true", required=True)
+    switch = commands.add_parser(
+        "switch-slack-channel", help="Preview an archived fresh start for a new Slack channel"
+    )
+    switch.add_argument("--from-channel", required=True, help="Current stored Slack channel ID")
+    switch.add_argument("--apply", action="store_true", help="Archive old state and start fresh")
+    switch.add_argument("--confirm-worker-stopped", action="store_true")
+    switch.add_argument("--accept-gap", action="store_true")
     demo = commands.add_parser("demo", help="Exercise the engine locally with fake platforms")
     demo.add_argument("--database", type=Path, default=None)
     args = parser.parse_args()
@@ -51,6 +58,11 @@ def main() -> None:
             configs = [c for c in configs if c.pair_id == args.pair]
             if not configs:
                 raise ValueError("Unknown pair id")
+        if args.command == "switch-slack-channel":
+            if len(configs) != 1:
+                raise ValueError("Select exactly one pair with --pair")
+            if args.apply and not (args.confirm_worker_stopped and args.accept_gap):
+                raise ValueError("Apply requires --confirm-worker-stopped and --accept-gap")
         if len(configs) > 1:
             print(
                 json.dumps(
@@ -88,6 +100,21 @@ def main() -> None:
 
             transport = LiveTransport(cfg)
             identity = transport.preflight()
+            if args.command == "switch-slack-channel":
+                from .migration import switch_slack_channel
+
+                result = switch_slack_channel(
+                    store,
+                    {
+                        **cfg.identity(),
+                        "slack_bot": identity["slack_bot"],
+                        "zulip_bot": identity["zulip_bot"],
+                    },
+                    args.from_channel,
+                    apply=args.apply,
+                )
+                print(json.dumps(result, indent=2))
+                return
             store.set("zulip_policy", identity["zulip_policy"])
             print(json.dumps(identity, indent=2))
             if args.command == "check":
