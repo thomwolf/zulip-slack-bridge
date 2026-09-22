@@ -3,8 +3,10 @@
 import hashlib
 import json
 import os
+import re
 import time
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 import zulip
@@ -14,6 +16,7 @@ from slack_sdk.errors import SlackApiError
 from .config import Config, secret
 from .content import EMOJI, ZULIP_NAMES, slack_message
 from .events import zulip_bot_ids
+from .formatting import markdown_text
 from .media import transfer_image
 from .model import DeliveryError, Platform
 from .store import Store
@@ -21,6 +24,8 @@ from .store import Store
 
 class LiveTransport:
     """Use bot credentials for the configured channel pair only."""
+
+    supports_auto_send_recovery = True
 
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
@@ -111,6 +116,7 @@ class LiveTransport:
             self.zulip_bots = {str(u["user_id"]) for u in members if u.get("is_bot")}
             settings = self.check_zulip(self.zulip.call_endpoint("server_settings", method="GET"))
             self.feature_level = int(settings.get("zulip_feature_level", 0))
+            self.zulip_bot = str(me["user_id"])
             self.policy = self.read_policy(int(me["user_id"]))
         except ValueError:
             raise
@@ -151,6 +157,57 @@ class LiveTransport:
                 headers = {k.lower(): v for k, v in error.response.headers.items()}
                 time.sleep(max(1, int(headers.get("retry-after", "60"))) + 1)
         raise AssertionError("Unreachable")
+
+    @staticmethod
+    def receipt_content(text: str, token: str) -> str:
+        """Attach a durable receipt to an existing source link without changing its label."""
+        if not token:
+            return text
+        pattern = r"\]\((https?://[^\s)]+)\)"
+        match = re.search(pattern, text)
+        bare = False
+        if match is None:
+            match = re.search(r"(https?://[^\s<>]+)", text)
+            bare = True
+        if match is None:
+            return text
+        url = urlsplit(match[1])
+        query = url.query + ("&" if url.query else "") + "bridge_receipt=" + token
+        tagged = urlunsplit(url._replace(query=query))
+        if bare:
+            tagged = f"[Original]({tagged})"
+        return text[: match.start(1)] + tagged + text[match.end(1) :]
+
+    def can_recover_send(self, platform: Platform, args: dict[str, Any]) -> bool:
+        """Enable absence-based recovery only where a persistent receipt is emitted."""
+        return platform == "slack" or self.receipt_content(args["text"], "probe") != args["text"]
+
+    def expand_channel_mentions(self, text: str) -> str:
+        """Resolve channel references in the worker, after the event is durably received."""
+        cache = getattr(self, "channels", {})
+        self.channels = cache
+
+        def replace(match: re.Match[str]) -> str:
+            channel = match[1]
+            if channel not in cache:
+                try:
+                    data = self.slack.conversations_info(channel=channel).get("channel") or {}
+                    cache[channel] = data["name"]
+                except SlackApiError as error:
+                    if error.response.get("error") in {
+                        "channel_not_found",
+                        "missing_scope",
+                        "not_in_channel",
+                    }:
+                        return "#" + channel
+                    raise DeliveryError("channel_name_lookup_retry", "retry", 30) from None
+                except Exception:
+                    raise DeliveryError("channel_name_lookup_retry", "retry", 30) from None
+            return "#" + markdown_text(cache[channel])
+
+        return re.sub(
+            r"```[\s\S]*?```|`[^`\n]+`|<#([A-Z0-9]+)>", lambda m: replace(m) if m[1] else m[0], text
+        )
 
     @staticmethod
     def write_digest(value: Any) -> str:
@@ -332,7 +389,7 @@ class LiveTransport:
                 "type": "stream",
                 "to": self.cfg.zulip_channel,
                 "topic": args["topic"],
-                "content": args["text"],
+                "content": self.receipt_content(args["text"], args.get("op_key", "")),
             }
         elif method == "edit":
             verb, request = "PATCH", {"content": args["text"]}
@@ -369,10 +426,11 @@ class LiveTransport:
         return {"id": str(checked["id"])} if method == "send" else {}
 
     def reconcile_sends(self, store: Store) -> None:
-        """Look for positive Slack metadata matches; absence never authorizes a resend."""
+        """Recover receipts or schedule guarded retries after complete history checks."""
         for send in store.uncertain_sends():
-            if send["platform"] != "slack":
-                continue  # Zulip local IDs exist only in the sending queue's echo.
+            if send["platform"] == "zulip":
+                self.reconcile_zulip_send(store, send)
+                continue
             try:
                 kwargs: dict[str, Any] = dict(
                     channel=self.cfg.slack_channel,
@@ -402,10 +460,61 @@ class LiveTransport:
                         break
                 if len(matches) == 1:
                     store.ingest([], receipts=[(send["token"], "slack", str(matches[0]["ts"]))])
+                elif not matches and not cursor and not page.get("has_more", False):
+                    store.confirm_send_absent(send["operation"])
             except Exception:
                 # Missing permissions, rate limits, truncation and read failures are all
                 # inconclusive. Keep the write uncertain without SDK payload logging.
                 return
+
+    def reconcile_zulip_send(self, store: Store, send: dict[str, Any]) -> None:
+        """Find durable receipts; partial history reads never authorize resending."""
+        try:
+            marker = f"bridge_receipt={send['token']}"
+            anchor: str | int = "newest"
+            matches = []
+            complete = False
+            for _ in range(10):
+                data = self.check_zulip(
+                    self.zulip.call_endpoint(
+                        "messages",
+                        method="GET",
+                        timeout=20,
+                        request={
+                            "anchor": anchor,
+                            "num_before": 100,
+                            "num_after": 0,
+                            "include_anchor": anchor == "newest",
+                            "apply_markdown": False,
+                            "narrow": [
+                                {"operator": "channel", "operand": self.cfg.zulip_channel},
+                                {"operator": "sender", "operand": int(self.zulip_bot)},
+                            ],
+                        },
+                    )
+                )
+                if anchor == "newest" and not data.get("found_newest"):
+                    return
+                messages = data["messages"]
+                matches.extend(
+                    str(m["id"])
+                    for m in messages
+                    if str(m["sender_id"]) == self.zulip_bot and marker in m["content"]
+                )
+                if data.get("found_oldest") or (
+                    messages and min(m["timestamp"] for m in messages) < send["started"] - 60
+                ):
+                    complete = True
+                    break
+                if not messages:
+                    break
+                anchor = min(m["id"] for m in messages)
+            if len(set(matches)) == 1:
+                store.ingest([], receipts=[(send["token"], "zulip", matches[0])])
+            elif complete and not matches:
+                store.confirm_send_absent(send["operation"])
+        except Exception:
+            return  # An unavailable/partial history never authorizes a resend.
 
     def group_membership(self, value: Any, user_id: int) -> bool | None:
         """Evaluate group settings when bot access is supported; otherwise report unknown."""
@@ -451,7 +560,7 @@ class LiveTransport:
             if channel.get("topics_policy") == "empty_topic_only":
                 raise ValueError("Blocked: Zulip channel disables named topics")
             self.max_topic_length = int(data.get("max_topic_length", 60))
-            self.max_message_length = int(data.get("max_message_length", 10000))
+            self.max_message_length = int(data.get("max_message_length", 10000)) - 100
             if self.max_topic_length < 14 or len(self.cfg.feed) > self.max_topic_length:
                 raise ValueError("Zulip topic length limit is too small for the configured bridge")
             if self.max_message_length < 512:

@@ -167,6 +167,9 @@ class Engine:
         )
         uploaded = dict(previous.get("uploaded_images", {}))
         body, suffix, images = e.text, "", []
+        expand = getattr(self.transport, "expand_channel_mentions", None)
+        if e.platform == "slack" and callable(expand):
+            body = str(expand(body))
         destination = "zulip" if e.platform == "slack" else "slack"
         for index, attachment in enumerate(attachments):
             identity = attachment["id"]

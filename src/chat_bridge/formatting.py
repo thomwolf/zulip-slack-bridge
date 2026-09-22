@@ -91,7 +91,7 @@ def slack_rich_to_zulip(
                     slack_user_name(element.get("user_id", ""), users), element.get("style", {})
                 )
             elif kind == "channel":
-                result += "#Slack channel"
+                result += "<#" + element.get("channel_id", "UNKNOWN") + ">"
             elif kind in {"broadcast", "usergroup"}:
                 result += "@group"
             else:
@@ -148,7 +148,11 @@ def slack_mrkdwn_to_zulip(text: str, users: dict[str, dict[str, Any]] | None = N
         text,
     )
     text = re.sub(r"<![^>]+>", "@group", text)
-    text = re.sub(r"<#([A-Z0-9]+)(?:\|([^>]+))?>", lambda m: "#" + (m[2] or m[1]), text)
+    text = re.sub(
+        r"<#([A-Z0-9]+)(?:\|([^>]+))?>",
+        lambda m: keep("#" + markdown_text(m[2])) if m[2] else keep(m[0]),
+        text,
+    )
     # Placeholders prevent one dialect's output delimiters being converted twice.
     for source, destination in [("*", "**"), ("_", "*"), ("~", "~~")]:
         pattern = rf"(?<![^\W_]){re.escape(source)}(?=\S)(.+?)(?<=\S){re.escape(source)}(?![^\W_])"

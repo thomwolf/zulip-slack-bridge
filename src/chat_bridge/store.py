@@ -47,6 +47,10 @@ class Store:
             CREATE TABLE IF NOT EXISTS envelopes (
                 envelope_id TEXT PRIMARY KEY, event_id TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS send_checks (
+                operation TEXT PRIMARY KEY, attempted REAL NOT NULL,
+                first_absent REAL, attempts INTEGER NOT NULL DEFAULT 1
+            );
             CREATE TABLE IF NOT EXISTS write_guards (
                 key TEXT PRIMARY KEY, method TEXT NOT NULL, baseline TEXT
             );
@@ -170,6 +174,39 @@ class Store:
                     "WHERE o.status='uncertain' AND s.message_id IS NULL LIMIT 10"
                 )
             ]
+
+    def confirm_send_absent(self, operation: str) -> None:
+        """Retry a marked send only after a grace period and two complete negative scans."""
+        now = time.time()
+        with self.lock, self.db:
+            row = self.db.execute(
+                "SELECT attempted,first_absent,attempts FROM send_checks WHERE operation=?",
+                (operation,),
+            ).fetchone()
+            if row is None or now - row[0] < min(900, 120 * 2 ** min(row[2] - 1, 3)):
+                return
+            receipt = self.db.execute(
+                "SELECT message_id FROM sends WHERE operation=?", (operation,)
+            ).fetchone()
+            if receipt and receipt[0]:
+                return
+            if row[1] is None:
+                self.db.execute(
+                    "UPDATE send_checks SET first_absent=? WHERE operation=?", (now, operation)
+                )
+                return
+            if now - row[1] < 30:
+                return
+            self.db.execute(
+                "UPDATE operations SET status='retry',error=NULL,category=NULL "
+                "WHERE key=? AND status='uncertain'",
+                (operation,),
+            )
+            self.db.execute(
+                "UPDATE inbox SET status='pending',next_attempt=0,error=NULL "
+                "WHERE key=? AND status='uncertain'",
+                (operation.rsplit("/", 1)[0],),
+            )
 
     def recover(self) -> None:
         """Never blindly repeat a write that was in flight when the process stopped."""
@@ -447,6 +484,19 @@ class Store:
                 token = self.db.execute(
                     "SELECT token FROM sends WHERE operation=?", (key,)
                 ).fetchone()[0]
+            recovery_check = getattr(transport, "can_recover_send", None)
+            if (
+                getattr(transport, "supports_auto_send_recovery", False) is True
+                and callable(recovery_check)
+                and recovery_check(platform, args)
+            ):
+                with self.lock, self.db:
+                    self.db.execute(
+                        "INSERT INTO send_checks(operation,attempted) VALUES (?,?) "
+                        "ON CONFLICT(operation) DO UPDATE SET attempted=excluded.attempted,"
+                        "first_absent=NULL,attempts=send_checks.attempts+1",
+                        (key, time.time()),
+                    )
             args = {**args, "op_key": token}
         try:
             result = transport.execute(platform, method, args)
