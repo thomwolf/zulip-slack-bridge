@@ -15,7 +15,7 @@ def test_liveness_does_not_claim_forwarding_readiness():
 def test_setup_server_has_no_credentials_or_config_endpoint(monkeypatch):
     monkeypatch.setenv("SLACK_BOT_TOKEN", "secret-not-for-browser")
     assert b"secret-not-for-browser" not in response("/")[2]
-    for path in ("/.env", "/config", "/status", "/?token=secret-not-for-browser"):
+    for path in ("/.env", "/config", "/status", "/config?token=secret-not-for-browser"):
         assert response(path)[0] == 404
 
 
@@ -68,3 +68,14 @@ def test_live_readiness_tracks_socket_and_worker(monkeypatch):
     runtime.store.get.side_effect = RuntimeError("secret-detail")
     assert response("/readyz")[0] == 503
     assert b"secret-detail" not in response("/")[2]
+
+
+def test_homepage_accepts_embed_queries_without_reflecting_them():
+    for path in ("/?__theme=light", "/?embed=true&__theme=dark", "/?token=private-query"):
+        status, content_type, data = response(path)
+        assert status == 200
+        assert content_type.startswith("text/html")
+        assert b"Edit bridge.toml" in data
+        assert b"private-query" not in data
+    assert response("/healthz?embed=true")[0] == 200
+    assert response("/missing?__theme=light")[0] == 404

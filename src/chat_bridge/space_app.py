@@ -93,6 +93,7 @@ with <code>BRIDGE_ENABLED=1</code>. Check this page after every change:
 
 def response(path: str) -> tuple[int, str, bytes]:
     """Serve operator guidance and distinguish container liveness from forwarding readiness."""
+    path = path.partition("?")[0]
     ready = forwarding_ready()
     if path == "/":
         state = (
